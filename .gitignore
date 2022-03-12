@@ -1,0 +1,9 @@
+# builds
+*.egg-info
+
+# cache
+__pycache__
+.pytest_cache
+
+# vs code
+.vscode
