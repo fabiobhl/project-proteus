@@ -10,6 +10,7 @@ from project_proteus.utils import read_config
 
 #external libraries imports
 from binance.client import Client
+from binance.enums import HistoricalKlinesType
 import pandas as pd
 
 
@@ -118,12 +119,13 @@ class DataBase():
             raise Exception("Your index is not possible, please check your index and the documentation on the DataBase object")
     
     @staticmethod
-    def _download_kline_interval(symbol, start_date, end_date, candlestick_interval, config_path):   
+    def _download_kline_interval(symbol, market_endpoint, start_date, end_date, candlestick_interval, config_path) -> pd.DataFrame:   
         """
         Description:
             Helper method for downloading all the kline data.           
         Arguments:
             -symbol[string]:                        The Cryptocurrency you want to trade (Note: With accordance to the Binance API)
+            -market_endpoint[str]:                  From which market to get the data from, either: "spot" or "futures"
             -start_date[string]:                    The date of the start of your data
             -end_date[string]:                      The date of the end of your data
             -candlestick_interval[string]:          On what interval the candlestick data should be downloaded
@@ -138,8 +140,14 @@ class DataBase():
         client = Client(api_key=config["binance"]["key"], api_secret=config["binance"]["secret"])
 
         #download the data and safe it in a dataframe
-        print(f"Downloading {candlestick_interval} klines...")
-        raw_data = client.get_historical_klines(symbol=symbol, interval=candlestick_interval, start_str=start_date, end_str=end_date)
+        print(f"Downloading {candlestick_interval} klines from endpoint: {market_endpoint}")
+        if market_endpoint == "spot":
+            raw_data = client.get_historical_klines(symbol=symbol, interval=candlestick_interval, start_str=start_date, end_str=end_date, klines_type=HistoricalKlinesType.SPOT)
+        elif market_endpoint == "futures":
+            raw_data = client.get_historical_klines(symbol=symbol, interval=candlestick_interval, start_str=start_date, end_str=end_date, klines_type=HistoricalKlinesType.FUTURES)
+        else:
+            raise Exception(f"Your chosen market_endpoint: {market_endpoint} is not available")
+        
         data = pd.DataFrame(raw_data)
 
         #clean the dataframe
@@ -161,7 +169,7 @@ class DataBase():
 
         return data
 
-    def add_candlestick_interval(self, candlestick_interval, config_path=None):
+    def add_candlestick_interval(self, candlestick_interval, config_path=None) -> None:
         """
         Description:
             Method for adding a candlestick interval to the database
@@ -170,11 +178,11 @@ class DataBase():
             -config_path[string]:                   Path to the config file, if none is given, it is assumed that the config-file is in the same folder as the file this method gets called from
         """
         #check if interval already exists
-        if os.path.isdir(os.path.join(self.path, candlestick_interval)):
+        if self.check_candlestick_interval(candlestick_interval):
             raise Exception("Your chosen candlestick_interval already exists")
 
         #download interval
-        data = self._download_kline_interval(symbol=self.dbid["symbol"], start_date=self.dbid["date_range"][0], end_date=self.dbid["date_range"][1], candlestick_interval=candlestick_interval, config_path=config_path)
+        data = self._download_kline_interval(symbol=self.dbid["symbol"], market_endpoint=self.dbid["market_endpoint"] ,start_date=self.dbid["date_range"][0], end_date=self.dbid["date_range"][1], candlestick_interval=candlestick_interval, config_path=config_path)
 
         #create the directory
         os.mkdir(os.path.join(self.path, candlestick_interval))
@@ -183,19 +191,35 @@ class DataBase():
         data.to_csv(path_or_buf=os.path.join(self.path, candlestick_interval, f"{candlestick_interval}.csv"), index_label="index")
 
         #add candlestick_interval to dbid
-        self.dbid["candlestick_interval"].append(candlestick_interval)
+        self.dbid["candlestick_intervals"].append(candlestick_interval)
         self.dbid.dump()
 
         print(f"{candlestick_interval} klines have been succesfully added!")
 
+    def check_candlestick_interval(self, candlestick_interval) -> bool:
+        """
+        Description:
+            Method for checking if candlestick_interval is available in this database
+        Arguments:
+            -candlestick_interval[bool]:        The candlestick_interval that should be checked
+        Return:
+            -result[bool]:                      Returns true if candlestick_interval is avaible and false if it is not available
+        """
+        #check if interval already exists
+        if os.path.isdir(os.path.join(self.path, candlestick_interval)):
+            return True
+        else:
+            return False
+
     @classmethod
-    def create(cls, save_path: str, symbol: str, date_span: tuple, candlestick_intervals: str, config_path: str = None):
+    def create(cls, save_path: str, symbol: str, market_endpoint: str, date_span: tuple, candlestick_intervals: str, config_path: str = None):
         """
         Description:
             This method creates a DataBase-Folder at a given location with the specified data.           
         Arguments:
             -save_path[string]:                     The location, where the folder gets created (Note: The name of the folder should be in the save_path e.g: "C:/.../desired_name")
             -symbol[string]:                        The Cryptocurrency you want to trade (Note: With accordance to the Binance API)
+            -market_endpoint[str]:                  From which market to get the data from, either: "spot" or "futures"
             -date_span[tuple]:                      Tuple of datetime.date objects in the form: (startdate, enddate)
             -candlestick_intervals[list[string]]:   On what interval the candlestick data should be downloaded
             -config_path[string]:                   Path to the config file, if none is given, it is assumed that the config-file is in the same folder as the file this method gets called from
@@ -220,7 +244,7 @@ class DataBase():
         try:
             for candlestick_interval in candlestick_intervals:
                 #download the data
-                data = cls._download_kline_interval(symbol=symbol, start_date=startdate, end_date=enddate, candlestick_interval=candlestick_interval, config_path=config_path)
+                data = cls._download_kline_interval(symbol=symbol, market_endpoint=market_endpoint, start_date=startdate, end_date=enddate, candlestick_interval=candlestick_interval, config_path=config_path)
                 #create the directory
                 os.mkdir(os.path.join(save_path, candlestick_interval))
                 #save the data to csv's
@@ -235,11 +259,18 @@ class DataBase():
         """
         Creating the dbid and saving it
         """
+        #create client
+        config = read_config(path=config_path)
+        client = Client(api_key=config["binance"]["key"], api_secret=config["binance"]["secret"])
+
         #create the dbid
         dbid = {
             "symbol": symbol,
+            "base_asset": client.get_symbol_info(symbol=symbol)["baseAsset"],
+            "quote_asset": client.get_symbol_info(symbol=symbol)["quoteAsset"],
+            "market_endpoint": market_endpoint,
             "date_range": (startdate, enddate),
-            "candlestick_interval": [candlestick_interval for candlestick_interval in candlestick_intervals]
+            "candlestick_intervals": [candlestick_interval for candlestick_interval in candlestick_intervals]
         }
 
         #save the dbid
@@ -249,4 +280,15 @@ class DataBase():
         return cls(path=save_path)
 
 if __name__ == "__main__":
-    pass
+    """
+    Example for creating a database
+    """
+    import datetime
+
+    db = DataBase.create(
+        save_path="/Users/fabio/Desktop/project-proteus/databases/test_futures",
+        symbol="BTCUSDT",
+        market_endpoint = "futures",
+        date_span=(datetime.date(2022, 1, 1), datetime.date(2022, 1, 10)),
+        candlestick_intervals=["5m", "15m"]
+    )
